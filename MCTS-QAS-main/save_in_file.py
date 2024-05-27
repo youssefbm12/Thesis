@@ -6,7 +6,10 @@ import os.path
 import numpy as np
 from structure import Circuit
 import matplotlib.pyplot as plt
-
+import networkx as nx
+import itertools
+from problems.combinatorial import graph
+#import cvxpy as cp
 
 
 def get_filename(evaluation_function, budget, branches, iteration, epsilon, stop_deterministic, rollout_type, image, gradient=False, gate_set='continuous', roll_out_steps=None):
@@ -190,6 +193,8 @@ def plot_cost(evaluation_function, branches, budget, roll_out_steps, rollout_typ
     filename = get_filename(evaluation_function=evaluation_function, branches=branches, image=True, roll_out_steps=roll_out_steps, rollout_type=rollout_type, iteration=0, budget=budget, epsilon=epsilon, stop_deterministic=stop_deterministic) + '_budget_'+str(budget)
     plt.legend(loc='best')
     plt.title(evaluation_function.__name__ + ' - Budget  '+str(budget))
+    max_value = get_benchmark(graph)
+    plt.axhline(y=-max_value, color='red', linestyle='--', label='Optimal Solution')
 
     plt.savefig(filename + '_cost_along_path.png')
     print('Plot of the cost along the path saved in image', filename)
@@ -213,6 +218,7 @@ def boxplot(budeget, evaluation_function, branches, roll_out_steps, rollout_type
             if isinstance(sol, tuple):
                 sol = sol[0]
             solutions.append(sol)
+            plt.title(evaluation_function.__name__ + ' GD')
         else:
             sol = best_in_path(evaluation_function, branches, budget, roll_out_steps, rollout_type, epsilon, stop_deterministic, n_iter)[0]
             solutions.append(sol)
@@ -224,8 +230,10 @@ def boxplot(budeget, evaluation_function, branches, roll_out_steps, rollout_type
     plt.boxplot(solutions, patch_artist=True, labels=budget_effective, meanline=True, showmeans=True, showfliers=True)
     print([min(a) for a in solutions])
     
+    max_value = get_benchmark(graph)
     filename = get_filename(evaluation_function=evaluation_function, branches=branches, image=True, roll_out_steps=roll_out_steps, rollout_type=rollout_type, iteration=0, epsilon=epsilon, stop_deterministic=stop_deterministic,  gradient=gradient, budget=0)
-    plt.title(evaluation_function.__name__)
+    plt.axhline(y=-max_value, color='red', linestyle='--', label='Optimal Solution')
+    #plt.title(evaluation_function.__name__)
     plt.xlabel('MCTS Simulations')
     plt.legend()
     plt.savefig(filename + '_boxplot.png')
@@ -250,9 +258,9 @@ def plot_gradient_descent(evaluation_function, branches, budget, roll_out_steps,
 
         gd_values = filtered_column.tolist()[0]
         plt.plot(range(len(gd_values)), gd_values, marker='o', linestyle='-', label=str(b))
-    plt.title(evaluation_function.__name__ + ' - Adam Optimizer')
+    plt.title(evaluation_function.__name__ + ' - Gradient Optimizer')
 
-    benchmark_value = get_benchmark(evaluation_function)
+    benchmark_value = get_benchmark(graph)
     if evaluation_function == qaoa:
         plt.ylabel('Energy (Ha)')
 
@@ -269,9 +277,14 @@ def plot_gradient_descent(evaluation_function, branches, budget, roll_out_steps,
     filename = get_filename(evaluation_function=evaluation_function, budget=budget, iteration=0, branches=branches,
                             epsilon=epsilon, stop_deterministic=stop_deterministic, rollout_type=rollout_type,
                             roll_out_steps=roll_out_steps, image=True)
+   
+    max_value=get_benchmark(graph)
+    plt.axhline(y=-max_value, color='red', linestyle='--', label='Optimal Solution')
     plt.savefig(filename+'_gd.png')
     plt.clf()
     return print('Gradient descent image saved in ', filename)
+
+
 
 
 # Utils
@@ -285,8 +298,58 @@ def check_file_exist(evaluation_function, branches, budget, roll_out_steps, roll
     return check
 
 
-def get_benchmark(evaluation_function):
+def get_benchmark(graph):
+    G = nx.Graph()
+    G.add_edges_from(graph)
+    best_partition, max_cut_size = max_cut_brute_force_unweighted(G)
     """ It returns the classical benchmark value of the problems in input"""
-    if evaluation_function == qaoa:
-        return 7 # SOLUTION ????????????
+    #result = goemans_williamson_maxcut(graph)
+    return max_cut_size # SOLUTION ????????????
+
+def max_cut_brute_force_unweighted(graph):
+    max_cut_size = 0
+    best_partition = None
+
+    nodes = list(graph.nodes())
+    all_partitions = itertools.product([0, 1], repeat=len(nodes))
+
+    for partition in all_partitions:
+        cut_size = 0
+        for u, v in graph.edges():
+            if partition[u] != partition[v]:  # Nodes in different partitions
+                cut_size += 1
+        if cut_size > max_cut_size:
+            max_cut_size = cut_size
+            best_partition = dict(zip(nodes, partition))
+
+    return best_partition, max_cut_size
+'''   
+def goemans_williamson_maxcut(graph):
+    # Create a NetworkX graph
+    G = nx.Graph()
+    G.add_edges_from(graph)
     
+    # Number of vertices in the graph
+    n = len(G.nodes)
+    
+    # Generate a random vector
+    r = np.random.normal(size=n)
+    
+    # Define the semidefinite optimization problem
+    X = cp.Variable((n, n), symmetric=True)
+    constraints = [X >> 0, cp.diag(X) == 1]
+    obj = cp.Maximize(0.25 * cp.sum(cp.multiply(nx.adjacency_matrix(G).todense(), (np.outer(r, r) - 2 * X))))
+    problem = cp.Problem(obj, constraints)
+    
+    # Solve the semidefinite optimization problem
+    problem.solve()
+    
+    # Compute Y and partition the vertices
+    Y = np.sign(X.value @ r)
+    set_S = {i for i, val in enumerate(Y) if val == 1}
+    
+    # Count the number of edges crossing the cut
+    cut_edges = sum(1 for u, v in G.edges if (u in set_S and v not in set_S) or (u not in set_S and v in set_S))
+    
+    return cut_edges
+'''
